@@ -70,8 +70,37 @@ class Library:
 LIBRARY = Library()
 
 
+def load_env(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
 def load_settings() -> dict:
     settings = dict(DEFAULT_SETTINGS)
+    env = load_env(ROOT / ".env")
+    key = (
+        env.get("LLM_API_KEY")
+        or env.get("DASH_API_KEY")
+        or env.get("ANTHROPIC_API_KEY")
+        or env.get("CLAUDE_API_KEY")
+        or ""
+    )
+    if key:
+        settings["api_key"] = key
+        settings["base_url"] = (
+            env.get("LLM_BASE_URL")
+            or env.get("ANTHROPIC_BASE_URL")
+            or "https://api-llm.dashlab.studio/v1"
+        ).rstrip("/")
+        settings["model"] = env.get("LLM_MODEL") or env.get("ANTHROPIC_MODEL") or "gemma4:31b"
     if SETTINGS_PATH.is_file():
         stored = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         settings.update({key: stored.get(key, settings[key]) for key in settings})

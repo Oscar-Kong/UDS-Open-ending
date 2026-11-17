@@ -38,15 +38,30 @@
             <p class="eyebrow">Advantage question</p>
             <h1>Ask about the comments</h1>
             <p>Answers come from the hard-filtered survey file in the library.</p>
+            <div class="starters samples" id="starters">
+              <div class="sample-group">
+                <h2>Bar chart</h2>
+                <button type="button">What is the main reason students feel they have an advantage?</button>
+                <button type="button">How many say yes, and how many say no?</button>
+                <button type="button">Where do students say there is no real advantage?</button>
+                <button type="button">What do Khoury students in 2024 say about co-op?</button>
+              </div>
+              <div class="sample-group">
+                <h2>Table</h2>
+                <button type="button">How do undergraduate and graduate students differ?</button>
+                <button type="button">What changed in the reasons after 2020?</button>
+                <button type="button">How do engineering and business school students differ?</button>
+              </div>
+              <div class="sample-group">
+                <h2>No chart</h2>
+                <button type="button">What is the average starting salary?</button>
+                <button type="button">What do law students in 2016 say about their advantage?</button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="composer-wrap">
           <div class="dock">
-          <div class="starters" id="starters">
-            <button type="button">What is the main reason students feel they have an advantage?</button>
-            <button type="button">How many say yes, and how many say no?</button>
-            <button type="button">How do undergraduate and graduate students differ?</button>
-          </div>
           <form id="composer">
             <label class="sr" for="message">Ask about the advantage comments</label>
             <textarea id="message" rows="1" placeholder="Ask about the advantage comments"></textarea>
@@ -78,20 +93,20 @@
 
           <article class="file-card" id="file-card"></article>
 
-          <h2>Model</h2>
-          <p class="lede">Paste a key when you want a model to write the short summary. Until then, chat answers come from the filtered counts and quotations. The key stays on this machine.</p>
+          <h2>LLM</h2>
+          <p class="lede">Paste a key when you want an LLM to write the short summary. Until then, chat answers come from the filtered counts and quotations. The key stays on this machine.</p>
           <form id="settings" class="settings">
-            <label>API key
-              <input id="api-key" type="password" autocomplete="off" placeholder="sk-…">
+            <label>LLM key
+              <input id="api-key" type="password" autocomplete="off" placeholder="Paste the LLM key">
             </label>
-            <label>Base URL
+            <label>Endpoint
               <input id="base-url" type="url" value="https://api.openai.com/v1">
             </label>
-            <label>Model
+            <label>LLM name
               <input id="model-name" type="text" value="gpt-4o-mini">
             </label>
             <div class="settings-row">
-              <button type="submit" class="solid">Save model settings</button>
+              <button type="submit" class="solid">Save LLM settings</button>
               <button type="button" id="clear-key">Remove key</button>
             </div>
             <p class="import-status" id="settings-status" role="status"></p>

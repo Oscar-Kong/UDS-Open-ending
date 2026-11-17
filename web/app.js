@@ -83,7 +83,7 @@ async function ask(text) {
       return;
     }
     messages.push({ role: "assistant", content: payload.text });
-    addTurn("assistant", payload.text, payload.quotes || []);
+    addTurn("assistant", payload.text, payload.quotes || [], payload.accuracy, payload.findings || [], payload.dashboard);
   } catch (error) {
     pending.remove();
     addTurn("assistant", "The server did not answer. Check that it is still running.");
@@ -93,10 +93,19 @@ async function ask(text) {
   }
 }
 
-function addTurn(role, text, quotes) {
+function addTurn(role, text, quotes, accuracy, findings, dashboard) {
   const turn = el("div", `turn ${role}`);
+  if (findings && findings.length) turn.append(findingsPanel(findings));
+  if (dashboard && (dashboard.kind === "bars" || dashboard.kind === "table")) turn.append(dashboardPanel(dashboard));
   const bubble = el("div", "bubble", text);
-  turn.append(bubble);
+  if (role === "assistant" && findings && findings.length) {
+    const summary = el("div", "summary");
+    summary.append(el("p", "accuracy-title", "Summary"));
+    summary.append(bubble);
+    turn.append(summary);
+  } else {
+    turn.append(bubble);
+  }
   if (quotes && quotes.length) {
     const list = el("div", "quotes");
     quotes.forEach((quote) => {
@@ -110,9 +119,100 @@ function addTurn(role, text, quotes) {
     });
     turn.append(list);
   }
+  if (accuracy && accuracy.checks) turn.append(accuracyPanel(accuracy));
   thread.append(turn);
   thread.scrollTop = thread.scrollHeight;
   return turn;
+}
+
+function findingsPanel(findings) {
+  const panel = el("div", "findings");
+  findings.forEach((block) => {
+    const card = el("section", "finding");
+    const title = block.label && block.label !== "All respondents" && block.label !== "All slices"
+      ? `${block.agent} · ${block.label}`
+      : block.agent;
+    card.append(el("h3", "", title));
+    const list = el("ul", "");
+    (block.lines || []).forEach((line) => list.append(el("li", "", line)));
+    card.append(list);
+    panel.append(card);
+  });
+  return panel;
+}
+
+function dashboardPanel(dashboard) {
+  const panel = el("section", "dashboard");
+  panel.setAttribute("aria-label", dashboard.title || "Counts");
+  panel.append(el("h3", "", dashboard.title || "Counts"));
+  if (dashboard.note) panel.append(el("p", "dash-note", dashboard.note));
+  if (dashboard.kind === "table") panel.append(dashboardTable(dashboard));
+  else panel.append(dashboardBars(dashboard));
+  return panel;
+}
+
+function dashboardBars(dashboard) {
+  const rows = dashboard.rows || [];
+  const max = Math.max(...rows.map((row) => Number(row.value) || 0), 1);
+  const list = el("ul", "bars");
+  rows.forEach((row) => {
+    const item = el("li", "");
+    item.append(el("span", "bar-label", row.label));
+    const track = el("span", "bar-track");
+    const fill = el("span", row.lead ? "bar-fill is-lead" : "bar-fill");
+    const width = Math.round(((Number(row.value) || 0) / max) * 100);
+    fill.style.width = `${width}%`;
+    track.append(fill);
+    item.append(track);
+    item.append(el("span", "bar-value", row.text || String(row.value)));
+    list.append(item);
+  });
+  return list;
+}
+
+function dashboardTable(dashboard) {
+  const table = document.createElement("table");
+  table.className = "dash-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headRow.append(document.createElement("th"));
+  (dashboard.columns || []).forEach((column) => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = column;
+    headRow.append(cell);
+  });
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  (dashboard.rows || []).forEach((row) => {
+    const line = document.createElement("tr");
+    const label = document.createElement("th");
+    label.scope = "row";
+    label.textContent = row.label;
+    line.append(label);
+    (row.values || []).forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      line.append(cell);
+    });
+    body.append(line);
+  });
+  table.append(head, body);
+  return table;
+}
+
+function accuracyPanel(accuracy) {
+  const panel = el("section", "accuracy");
+  const title = accuracy.ok ? "Pass" : "Check failed";
+  panel.append(el("p", "accuracy-title", `Accuracy · ${title} · ${accuracy.source}`));
+  if (accuracy.note) panel.append(el("p", "accuracy-note", accuracy.note));
+  const list = el("ul", "");
+  accuracy.checks.forEach((check) => {
+    const item = el("li", check.ok ? "ok" : "bad", `${check.ok ? "Pass" : "Fail"} · ${check.label}. ${check.detail}`);
+    list.append(item);
+  });
+  panel.append(list);
+  return panel;
 }
 
 async function loadLibrary() {
@@ -141,11 +241,11 @@ function renderLibrary(payload) {
   });
   card.append(preview);
   document.getElementById("side-status").textContent = payload.model.has_key
-    ? `${payload.name} · model connected`
-    : `${payload.name} · add a model key when you want generated summaries`;
+    ? `${payload.name} · LLM connected`
+    : `${payload.name} · add an LLM key when you want generated summaries`;
   document.getElementById("hint").textContent = payload.model.has_key
-    ? "Answers are short summaries from the connected model, using the filtered comments."
-    : "Answers use the filtered counts and quotations until a model key is saved in Library.";
+    ? "Answers are short summaries from the connected LLM, using the filtered comments."
+    : "Answers use the filtered counts and quotations until an LLM key is saved in Library.";
 }
 
 function renderModel(model) {
@@ -208,16 +308,16 @@ async function saveSettings(body) {
     body: JSON.stringify(body),
   });
   const payload = await response.json();
-  status.textContent = payload.has_key ? "Model key saved." : "Model key removed. Chat will use the filtered counts.";
+  status.textContent = payload.has_key ? "LLM key saved." : "LLM key removed. Chat will use the filtered counts.";
   document.getElementById("api-key").value = "";
   renderModel(payload);
   const library = await fetch("/api/library").then((item) => item.json());
   document.getElementById("side-status").textContent = payload.has_key
-    ? `${library.name} · model connected`
-    : `${library.name} · add a model key when you want generated summaries`;
+    ? `${library.name} · LLM connected`
+    : `${library.name} · add an LLM key when you want generated summaries`;
   document.getElementById("hint").textContent = payload.has_key
-    ? "Answers are short summaries from the connected model, using the filtered comments."
-    : "Answers use the filtered counts and quotations until a model key is saved in Library.";
+    ? "Answers are short summaries from the connected LLM, using the filtered comments."
+    : "Answers use the filtered counts and quotations until an LLM key is saved in Library.";
 }
 
 loadLibrary();
