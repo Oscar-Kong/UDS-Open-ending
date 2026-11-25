@@ -24,35 +24,41 @@ from pipeline.corpus import load
 
 CASES = [
     {
+        "id": "main-reason",
         "question": "What is the main reason students feel they have an advantage?",
         "support": "enough",
         "lead": "coop",
         "quotes": True,
     },
     {
+        "id": "yes-no",
         "question": "How many say yes, and how many say no?",
         "support": "enough",
         "mode": "stance",
         "quotes": True,
     },
     {
+        "id": "level-compare",
         "question": "How do undergraduate and graduate students differ?",
         "support": "enough",
         "slices": 2,
         "quotes": True,
     },
     {
+        "id": "no-advantage",
         "question": "Where do students say there is no real advantage?",
         "support": "enough",
         "lead": "parity",
         "quotes": True,
     },
     {
+        "id": "starting-salary",
         "question": "What is the average starting salary?",
         "support": "insufficient",
         "quotes": False,
     },
     {
+        "id": "law-2016",
         "question": "What do law students in 2016 say about their advantage?",
         "support": "insufficient",
         "quotes": False,

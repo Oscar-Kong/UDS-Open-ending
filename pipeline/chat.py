@@ -25,6 +25,11 @@ SYSTEM = (
     "Do not use bullet points."
 )
 
+TITLE = (
+    "Name one saved chat about a Northeastern survey. "
+    "Use 4 to 7 words. Do not use quotation marks. Do not end with a period."
+)
+
 
 def reply(records: list[Record], message: str, settings: dict) -> dict:
     result = answer(records, message)
@@ -39,7 +44,7 @@ def reply(records: list[Record], message: str, settings: dict) -> dict:
         return _with_accuracy(_template(result), result, records, "Filtered counts")
     try:
         text = _complete(message, packet, settings)
-    except Exception as exc:  # noqa: BLE001 — surface a short failure, keep the grounded text
+    except Exception as exc:  # noqa: BLE001 — one retry already ran inside _complete
         grounded = _template(result)
         reason = _short_error(exc)
         note = f"The LLM did not respond ({reason}). This score is for the filtered summary."
@@ -85,6 +90,7 @@ def _template(result: dict) -> dict:
     return {
         "text": result.get("headline") or "",
         "quotes": _quotes(result),
+        "source": "filter",
         "support": result.get("support"),
         "findings": result.get("findings") or [],
         "dashboard": result.get("dashboard"),
@@ -269,19 +275,43 @@ def _quotes(result: dict) -> list[dict]:
     return chosen
 
 
+def chat_title(question: str, answer: str, settings: dict) -> str | None:
+    """A short sidebar name, written once the chat has been saved. One retry."""
+    if not (settings.get("api_key") or "").strip():
+        return None
+    user = "Question:\n" + question.strip() + "\n\nAnswer:\n" + (answer or "").strip()[:600]
+    try:
+        text = _ask(TITLE, user, settings, max_tokens=32, timeout=45)
+    except Exception:  # noqa: BLE001 — keep the question text when both tries fail
+        return None
+    return _tidy_title(text)
+
+
 def _complete(message: str, packet: dict, settings: dict) -> str:
+    user = "Question:\n" + message + "\n\nPacket:\n" + json.dumps(packet, ensure_ascii=False)
+    return _ask(SYSTEM, user, settings, max_tokens=500, timeout=180)
+
+
+def _ask(system: str, user: str, settings: dict, *, max_tokens: int, timeout: int) -> str:
+    last: Exception | None = None
+    for _attempt in range(2):
+        try:
+            return _post(system, user, settings, max_tokens=max_tokens, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 — the second try is the retry
+            last = exc
+    raise last if last else RuntimeError("The LLM did not respond.")
+
+
+def _post(system: str, user: str, settings: dict, *, max_tokens: int, timeout: int) -> str:
     base = (settings.get("base_url") or "https://api.openai.com/v1").rstrip("/")
     model = settings.get("model") or "gpt-4o-mini"
     payload = {
         "model": model,
         "temperature": 0.2,
-        "max_tokens": 500,
+        "max_tokens": max_tokens,
         "messages": [
-            {"role": "system", "content": SYSTEM},
-            {
-                "role": "user",
-                "content": "Question:\n" + message + "\n\nPacket:\n" + json.dumps(packet, ensure_ascii=False),
-            },
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
         ],
     }
     if "dashlab" in base:
@@ -296,12 +326,24 @@ def _complete(message: str, packet: dict, settings: dict) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:240]
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
     return _message_text(body)
+
+
+def _tidy_title(text: str) -> str | None:
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    line = " ".join(line.split()).strip(" \"'`“”")
+    if line.endswith("."):
+        line = line[:-1].rstrip()
+    if len(line) < 3:
+        return None
+    if len(line) > 60:
+        line = line[:57].rstrip() + "…"
+    return line
 
 
 def _message_text(body: dict) -> str:

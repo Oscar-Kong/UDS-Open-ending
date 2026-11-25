@@ -4,8 +4,20 @@ const starters = document.getElementById("starters");
 const message = document.getElementById("message");
 const send = document.getElementById("send");
 const hint = document.getElementById("hint");
+const chatModel = document.getElementById("chat-model");
 
 const messages = [];
+let currentId = null;
+let viewToken = 0;
+let latestModel = { has_key: false, model: "", base_url: "" };
+let libraryName = "";
+let modelNames = [];
+let listError = "";
+let modelSynced = false;
+let evalCatalog = null;
+let evalRunning = false;
+let evalSamples = [];
+let evalModels = [];
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -20,7 +32,9 @@ function setView(name) {
   });
   document.getElementById("chat").hidden = name !== "chat";
   document.getElementById("library").hidden = name !== "library";
+  document.getElementById("evaluate").hidden = name !== "evaluate";
   if (name === "library") loadLibrary();
+  if (name === "evaluate") loadEvaluation();
 }
 
 document.querySelectorAll(".nav").forEach((button) => {
@@ -28,11 +42,15 @@ document.querySelectorAll(".nav").forEach((button) => {
 });
 
 document.getElementById("new-chat").addEventListener("click", () => {
+  viewToken += 1;
+  currentId = null;
   messages.length = 0;
   thread.querySelectorAll(".turn").forEach((node) => node.remove());
   empty.hidden = false;
   starters.hidden = false;
+  syncFrame();
   setView("chat");
+  loadHistory();
   message.focus();
 });
 
@@ -53,6 +71,11 @@ message.addEventListener("input", () => {
   message.style.height = Math.min(message.scrollHeight, 160) + "px";
 });
 
+chatModel.addEventListener("change", () => {
+  applyHint();
+  if (chatModel.value) saveSettings({ model: chatModel.value }, { silent: true });
+});
+
 starters.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (button) ask(button.textContent);
@@ -61,51 +84,77 @@ starters.addEventListener("click", (event) => {
 async function ask(text) {
   const question = text.trim();
   if (!question || send.disabled) return;
+  const token = viewToken;
+  const requestChat = currentId;
+  const chosenModel = chatModel.value;
   message.value = "";
   message.style.height = "auto";
   empty.hidden = true;
   starters.hidden = true;
   messages.push({ role: "user", content: question });
   addTurn("user", question);
-  const pending = addTurn("assistant", "Reading the filtered comments…");
-  pending.classList.add("pending");
+  const pending = addPending();
   send.disabled = true;
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: question }),
+      body: JSON.stringify({ message: question, model: chosenModel, chat_id: requestChat }),
     });
     const payload = await response.json();
+    if (token !== viewToken) return;
     pending.remove();
     if (!response.ok) {
       addTurn("assistant", payload.error || "The question did not go through.");
       return;
     }
+    currentId = payload.chat_id;
     messages.push({ role: "assistant", content: payload.text });
-    addTurn("assistant", payload.text, payload.quotes || [], payload.accuracy, payload.findings || [], payload.dashboard);
+    addTurn("assistant", payload.text, payload.quotes || [], payload.accuracy, payload.findings || [], payload.dashboard, payload.model, payload.source, { stream: true, token });
   } catch (error) {
+    if (token !== viewToken) return;
     pending.remove();
     addTurn("assistant", "The server did not answer. Check that it is still running.");
   } finally {
     send.disabled = false;
-    message.focus();
+    loadHistory();
+    if (token === viewToken) message.focus();
   }
 }
 
-function addTurn(role, text, quotes, accuracy, findings, dashboard) {
+function addPending() {
+  const turn = el("div", "turn assistant has-facts pending");
+  turn.append(factsShell("Reading…"));
+  const reply = el("div", "reply");
+  reply.append(el("div", "bubble", "Reading the filtered comments…"));
+  turn.append(reply);
+  thread.append(turn);
+  followThread(true);
+  syncFrame();
+  return turn;
+}
+
+function addTurn(role, text, quotes, accuracy, findings, dashboard, modelName, source, options) {
   const turn = el("div", `turn ${role}`);
-  if (findings && findings.length) turn.append(findingsPanel(findings));
-  if (dashboard && (dashboard.kind === "bars" || dashboard.kind === "table")) turn.append(dashboardPanel(dashboard));
-  const bubble = el("div", "bubble", text);
-  if (role === "assistant" && findings && findings.length) {
+  const counts = (findings || []).filter((block) => block.agent === "Scope" || block.agent === "Stance" || block.agent === "Reasons");
+  const host = counts.length ? el("div", "reply") : turn;
+  if (counts.length) {
+    turn.classList.add("has-facts");
+    turn.append(factsPanel(findings));
+  }
+  if (dashboard && (dashboard.kind === "bars" || dashboard.kind === "table")) host.append(dashboardPanel(dashboard));
+  const stream = Boolean(options && options.stream) && role === "assistant";
+  const bubble = el("div", stream ? "bubble is-streaming" : "bubble", stream ? "" : text);
+  if (stream) bubble.setAttribute("aria-busy", "true");
+  if (role === "assistant" && counts.length) {
     const summary = el("div", "summary");
     summary.append(el("p", "accuracy-title", "Summary"));
     summary.append(bubble);
-    turn.append(summary);
+    host.append(summary);
   } else {
-    turn.append(bubble);
+    host.append(bubble);
   }
+  const later = [];
   if (quotes && quotes.length) {
     const list = el("div", "quotes");
     quotes.forEach((quote) => {
@@ -117,28 +166,141 @@ function addTurn(role, text, quotes, accuracy, findings, dashboard) {
       block.append(el("p", "", quote.text));
       list.append(block);
     });
-    turn.append(list);
+    later.push(list);
   }
-  if (accuracy && accuracy.checks) turn.append(accuracyPanel(accuracy));
+  const evidence = (findings || []).find((block) => block.agent === "Evidence");
+  if (evidence && evidence.lines && evidence.lines.length) later.push(el("p", "evidence-line", evidence.lines[0]));
+  if (accuracy && accuracy.checks) later.push(accuracyPanel(accuracy));
+  if (role === "assistant" && modelName) {
+    const label = source && source !== "model" ? `${modelName} · filtered summary` : modelName;
+    later.push(el("p", "turn-model", label));
+  }
+  later.forEach((node) => {
+    if (stream) node.hidden = true;
+    host.append(node);
+  });
+  if (host !== turn) turn.append(host);
   thread.append(turn);
-  thread.scrollTop = thread.scrollHeight;
+  followThread(true);
+  syncFrame();
+  if (stream) writeGradually(bubble, text || "", options.token).then(() => {
+    const gap = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+    later.forEach((node) => { node.hidden = false; });
+    if (gap < 140) thread.scrollTop = thread.scrollHeight;
+  });
   return turn;
 }
 
-function findingsPanel(findings) {
-  const panel = el("div", "findings");
-  findings.forEach((block) => {
-    const card = el("section", "finding");
-    const title = block.label && block.label !== "All respondents" && block.label !== "All slices"
-      ? `${block.agent} · ${block.label}`
-      : block.agent;
-    card.append(el("h3", "", title));
-    const list = el("ul", "");
-    (block.lines || []).forEach((line) => list.append(el("li", "", line)));
-    card.append(list);
-    panel.append(card);
+function syncFrame() {
+  document.getElementById("chat").classList.toggle("is-open", thread.querySelector(".turn") != null);
+}
+
+function followThread(force) {
+  const gap = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+  if (force || gap < 140) thread.scrollTop = thread.scrollHeight;
+}
+
+function writeGradually(node, text, token) {
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce || text.length < 12) {
+    node.textContent = text;
+    node.classList.remove("is-streaming");
+    node.removeAttribute("aria-busy");
+    return Promise.resolve();
+  }
+  const words = text.split(/(\s+)/);
+  let index = 0;
+  return new Promise((resolve) => {
+    const step = () => {
+      if (!node.isConnected || token !== viewToken) {
+        resolve();
+        return;
+      }
+      let added = 0;
+      while (index < words.length && added < 1) {
+        node.textContent += words[index];
+        if (words[index].trim()) added += 1;
+        index += 1;
+      }
+      followThread(false);
+      if (index >= words.length) {
+        node.classList.remove("is-streaming");
+        node.removeAttribute("aria-busy");
+        resolve();
+        return;
+      }
+      window.setTimeout(step, 28);
+    };
+    step();
   });
-  return panel;
+}
+
+function factsShell(wait) {
+  const side = el("aside", "facts");
+  side.setAttribute("aria-label", "Scope, stance, and reasons");
+  ["Scope", "Stance", "Reasons"].forEach((name) => {
+    const section = el("section", "fact");
+    section.append(el("h3", "", name));
+    section.append(el("p", "fact-wait", wait));
+    side.append(section);
+  });
+  return side;
+}
+
+function factsPanel(findings) {
+  const side = el("aside", "facts");
+  side.setAttribute("aria-label", "Scope, stance, and reasons");
+  const groups = new Map();
+  (findings || []).forEach((block) => {
+    if (block.agent !== "Scope" && block.agent !== "Stance" && block.agent !== "Reasons") return;
+    const key = block.label || "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(block);
+  });
+  const named = [...groups.keys()].filter((label) => label && label !== "All respondents" && label !== "All slices");
+  groups.forEach((blocks, label) => {
+    if (named.length > 1 && named.includes(label)) side.append(el("p", "fact-slice", label));
+    blocks.forEach((block) => {
+      const section = el("section", "fact");
+      section.append(el("h3", "", block.agent));
+      (block.lines || []).forEach((line) => {
+        compactFact(block.agent, line).forEach((bit, index) => {
+          const stat = block.agent !== "Reasons" || index > 0;
+          const row = el("p", stat ? "fact-stat" : "fact-name", bit);
+          row.title = line;
+          section.append(row);
+        });
+      });
+      side.append(section);
+    });
+  });
+  return side;
+}
+
+function compactFact(agent, line) {
+  if (agent === "Scope") {
+    if (line.includes("comments in this slice")) return [line.replace(" in this slice", "").replace(/\.$/, "")];
+    return line.replace(/\.$/, "").split(", ").map((part) => part.replace(" short reasons", " short"));
+  }
+  if (agent === "Stance") {
+    const yes = line.match(/(\d+%) say yes \(([\d,]+)\)/);
+    const no = line.match(/([\d,]+) say no/);
+    const mixed = line.match(/([\d,]+) are mixed/);
+    const unsure = line.match(/([\d,]+) are unsure/);
+    const clear = line.match(/clear \(([\d,]+) comments\)/);
+    const bits = [];
+    if (clear) bits.push(`${clear[1]} clear`);
+    if (yes) bits.push(`${yes[1]} yes (${yes[2]})`);
+    if (no) bits.push(`${no[1]} no`);
+    if (mixed) bits.push(`${mixed[1]} mixed`);
+    if (unsure) bits.push(`${unsure[1]} unsure`);
+    if (bits.length) return bits;
+  }
+  if (agent === "Reasons") {
+    const match = line.match(/^(.+?): ([\d,]+) explanations \((\d+)% of explanations\), plus ([\d,]+) short labels\.$/);
+    if (match) return [match[1], `${match[2]} · ${match[3]}%`, `${match[4]} short`];
+  }
+  return [line];
 }
 
 function dashboardPanel(dashboard) {
@@ -218,8 +380,11 @@ function accuracyPanel(accuracy) {
 async function loadLibrary() {
   const response = await fetch("/api/library");
   const payload = await response.json();
+  libraryName = payload.name;
+  latestModel = payload.model;
   renderLibrary(payload);
-  renderModel(payload.model);
+  renderModel(payload.model, !modelSynced);
+  modelSynced = true;
 }
 
 function renderLibrary(payload) {
@@ -240,19 +405,366 @@ function renderLibrary(payload) {
     preview.append(item);
   });
   card.append(preview);
-  document.getElementById("side-status").textContent = payload.model.has_key
-    ? `${payload.name} · LLM connected`
-    : `${payload.name} · add an LLM key when you want generated summaries`;
-  document.getElementById("hint").textContent = payload.model.has_key
-    ? "Answers are short summaries from the connected LLM, using the filtered comments."
-    : "Answers use the filtered counts and quotations until an LLM key is saved in Library.";
+  sideStatus();
+  applyHint();
 }
 
-function renderModel(model) {
+function renderModel(model, syncChat) {
   document.getElementById("base-url").value = model.base_url;
   document.getElementById("model-name").value = model.model;
   document.getElementById("api-key").value = "";
   document.getElementById("api-key").placeholder = model.has_key ? "Key saved — paste a new one to replace it" : "sk-…";
+  if (syncChat) setChatModel(model.model);
+}
+
+function setChatModel(name) {
+  if (!name) return;
+  if (![...chatModel.options].some((option) => option.value === name)) {
+    chatModel.add(new Option(name, name));
+  }
+  chatModel.value = name;
+}
+
+function applyHint() {
+  if (!latestModel.has_key) {
+    hint.textContent = "Answers use the filtered counts until an LLM key is saved in Library.";
+    return;
+  }
+  hint.textContent = listError ? "Live model list unavailable. Showing the saved names." : "";
+}
+
+function sideStatus() {
+  document.getElementById("side-status").textContent = latestModel.has_key
+    ? `${libraryName} · ${latestModel.model}`
+    : `${libraryName} · add an LLM key when you want generated summaries`;
+}
+
+async function loadModels() {
+  const payload = await fetch("/api/models").then((item) => item.json());
+  listError = payload.error || "";
+  modelNames = payload.models || [];
+  const current = chatModel.value || payload.model;
+  chatModel.replaceChildren();
+  modelNames.forEach((name) => chatModel.add(new Option(name, name)));
+  setChatModel(current || payload.model);
+  applyHint();
+}
+
+function formatWhen(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+async function loadHistory() {
+  const payload = await fetch("/api/chats").then((item) => item.json());
+  const list = document.getElementById("history-list");
+  list.replaceChildren();
+  const chats = payload.chats || [];
+  if (!chats.length) {
+    list.append(el("p", "history-empty", "No saved chats yet."));
+    return;
+  }
+  chats.forEach((chat) => {
+    const row = el("div", "history-row");
+    const button = el("button", chat.id === currentId ? "history-item is-on" : "history-item");
+    button.type = "button";
+    button.append(el("span", "history-title", chat.title));
+    const meta = [chat.model, formatWhen(chat.updated)].filter(Boolean).join(" · ");
+    if (meta) button.append(el("span", "history-meta", meta));
+    button.addEventListener("click", () => openChat(chat.id));
+    const remove = el("button", "history-delete");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Delete ${chat.title}`);
+    remove.append(icon("M6 6l12 12M18 6L6 18"));
+    remove.addEventListener("click", () => deleteChat(chat));
+    row.append(button, remove);
+    list.append(row);
+  });
+}
+
+function icon(path) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  node.setAttribute("d", path);
+  svg.append(node);
+  return svg;
+}
+
+async function openChat(id) {
+  viewToken += 1;
+  const response = await fetch(`/api/chats?id=${encodeURIComponent(id)}`);
+  const chat = await response.json();
+  if (!response.ok) return;
+  currentId = chat.id;
+  messages.length = 0;
+  thread.querySelectorAll(".turn").forEach((node) => node.remove());
+  const turns = chat.messages || [];
+  empty.hidden = turns.length > 0;
+  starters.hidden = turns.length > 0;
+  turns.forEach((turn) => {
+    messages.push(turn);
+    if (turn.role === "user") addTurn("user", turn.content);
+    else addTurn("assistant", turn.content, turn.quotes, turn.accuracy, turn.findings, turn.dashboard, turn.model, turn.source);
+  });
+  if (chat.model) setChatModel(chat.model);
+  syncFrame();
+  setView("chat");
+  loadHistory();
+  message.focus();
+}
+
+async function deleteChat(chat) {
+  if (!window.confirm(`Delete “${chat.title}”?`)) return;
+  const response = await fetch("/api/chats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "delete", id: chat.id }),
+  });
+  if (!response.ok) return;
+  if (currentId === chat.id) {
+    viewToken += 1;
+    currentId = null;
+    messages.length = 0;
+    thread.querySelectorAll(".turn").forEach((node) => node.remove());
+    empty.hidden = false;
+    starters.hidden = false;
+    syncFrame();
+  }
+  loadHistory();
+}
+
+async function loadEvaluation() {
+  const [catalog, models] = await Promise.all([
+    fetch("/api/evals").then((item) => item.json()),
+    fetch("/api/models").then((item) => item.json()),
+  ]);
+  evalCatalog = catalog;
+  modelNames = models.models || modelNames;
+  listError = models.error || "";
+  renderEvalIntro(catalog);
+  if (!evalRunning) fillEvalModels();
+  renderSavedRuns(catalog.runs || []);
+  applyHint();
+}
+
+function renderEvalIntro(catalog) {
+  const scorers = document.getElementById("eval-scorers");
+  const questions = document.getElementById("eval-questions");
+  if (!scorers.childElementCount) {
+    (catalog.scorers || []).forEach((scorer) => {
+      scorers.append(el("li", "", `${scorer.label}. ${scorer.detail}`));
+    });
+  }
+  if (!questions.childElementCount) {
+    (catalog.scenarios || []).forEach((scenario) => questions.append(el("li", "", scenario.input)));
+  }
+}
+
+function fillEvalModels() {
+  const box = document.getElementById("eval-model-list");
+  const previously = new Set([...box.querySelectorAll("input:checked")].map((input) => input.value));
+  const first = box.childElementCount === 0;
+  box.replaceChildren();
+  box.append(modelChoice("Filtered counts", false, first || previously.has("Filtered counts"), false));
+  const current = chatModel.value || latestModel.model;
+  modelNames.forEach((name) => {
+    const checked = latestModel.has_key && (first ? name === current : previously.has(name));
+    box.append(modelChoice(name, true, checked, !latestModel.has_key));
+  });
+}
+
+function modelChoice(name, useModel, checked, disabled) {
+  const label = el("label", "check");
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.value = name;
+  input.dataset.useModel = useModel ? "1" : "0";
+  input.checked = checked && !disabled;
+  input.disabled = disabled;
+  label.append(input, document.createTextNode(name));
+  return label;
+}
+
+document.getElementById("eval-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  runEvaluation();
+});
+
+async function runEvaluation() {
+  if (evalRunning) return;
+  const selected = [...document.querySelectorAll("#eval-model-list input:checked")].map((input) => ({
+    name: input.value,
+    use_model: input.dataset.useModel === "1",
+  }));
+  const status = document.getElementById("eval-status");
+  if (!selected.length) {
+    status.textContent = "Choose at least one model.";
+    return;
+  }
+  evalRunning = true;
+  document.getElementById("eval-run").disabled = true;
+  evalSamples = [];
+  evalModels = selected.map((item) => item.name);
+  renderEvalTable();
+  try {
+    const started = await postEval({ action: "start", models: selected });
+    const scenarios = evalCatalog.scenarios || [];
+    const total = scenarios.length * selected.length;
+    let index = 0;
+    for (const model of selected) {
+      for (const scenario of scenarios) {
+        index += 1;
+        status.textContent = `${index} of ${total} · ${model.name}`;
+        const payload = await postEval({
+          action: "sample",
+          id: started.id,
+          scenario: scenario.id,
+          model: model.name,
+          use_model: model.use_model,
+        });
+        evalSamples.push(payload.sample);
+        renderEvalTable();
+      }
+    }
+    status.textContent = "Evaluation saved.";
+    const catalog = await fetch("/api/evals").then((item) => item.json());
+    evalCatalog = catalog;
+    renderSavedRuns(catalog.runs || []);
+  } catch (error) {
+    status.textContent = error.message || "The evaluation stopped.";
+    const catalog = await fetch("/api/evals").then((item) => item.json());
+    renderSavedRuns(catalog.runs || []);
+  } finally {
+    evalRunning = false;
+    document.getElementById("eval-run").disabled = false;
+  }
+}
+
+async function postEval(body) {
+  const response = await fetch("/api/evals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "The evaluation stopped.");
+  return payload;
+}
+
+function renderEvalTable() {
+  const host = document.getElementById("eval-results");
+  const previous = document.getElementById("eval-detail");
+  const openId = previous && previous.dataset.sampleId;
+  host.replaceChildren();
+  if (!evalModels.length) return;
+  const scenarios = (evalCatalog && evalCatalog.scenarios) || [];
+  const metrics = evalModels.map((name) => {
+    const group = evalSamples.filter((sample) => sample.output && sample.output.model === name);
+    const correct = group.filter((sample) => sample.ok).length;
+    return `${name} ${correct}/${scenarios.length}`;
+  }).join(" · ");
+  host.append(el("p", "eval-metrics", metrics));
+  const scroll = el("div", "eval-scroll");
+  const table = document.createElement("table");
+  table.className = "dash-table eval-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.textContent = "Question";
+  headRow.append(corner);
+  evalModels.forEach((name) => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = name;
+    headRow.append(cell);
+  });
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  scenarios.forEach((scenario) => {
+    const line = document.createElement("tr");
+    const label = document.createElement("th");
+    label.scope = "row";
+    label.textContent = scenario.input;
+    line.append(label);
+    evalModels.forEach((name) => {
+      const cell = document.createElement("td");
+      const sample = evalSamples.find((item) => item.metadata && item.metadata.scenario === scenario.id && item.output && item.output.model === name);
+      if (!sample) {
+        cell.textContent = "—";
+      } else {
+        const button = el("button", sample.ok ? "score-cell pass" : "score-cell fail", sample.ok ? "Pass" : "Fail");
+        button.type = "button";
+        button.addEventListener("click", () => showSample(sample));
+        cell.append(button);
+      }
+      line.append(cell);
+    });
+    body.append(line);
+  });
+  table.append(head, body);
+  scroll.append(table);
+  const detail = el("div", "eval-detail");
+  detail.id = "eval-detail";
+  host.append(scroll, detail);
+  if (openId) {
+    const sample = evalSamples.find((item) => item.id === openId);
+    if (sample) showSample(sample);
+  }
+}
+
+function showSample(sample) {
+  const detail = document.getElementById("eval-detail");
+  if (!detail) return;
+  detail.dataset.sampleId = sample.id;
+  detail.replaceChildren();
+  detail.append(el("h3", "", sample.output.model));
+  detail.append(el("p", "eval-target", `Target · ${sample.target}`));
+  detail.append(el("p", "", sample.output.completion));
+  const list = el("ul", "");
+  Object.entries(sample.scores || {}).forEach(([name, score]) => {
+    const ok = score.value === "C";
+    const label = name.charAt(0).toUpperCase() + name.slice(1);
+    list.append(el("li", ok ? "ok" : "bad", `${ok ? "Pass" : "Fail"} · ${label}. ${score.explanation}`));
+  });
+  detail.append(list);
+  if (sample.error) detail.append(el("p", "accuracy-note", sample.error));
+}
+
+function renderSavedRuns(runs) {
+  const host = document.getElementById("eval-saved");
+  host.replaceChildren();
+  if (!runs.length) {
+    host.append(el("p", "lede", "No evaluation is saved yet."));
+    return;
+  }
+  runs.forEach((run) => {
+    const button = el("button", "saved-run");
+    button.type = "button";
+    button.append(el("span", "history-title", (run.models || []).join(", ") || "Evaluation"));
+    const scores = run.results && run.results.by_model
+      ? Object.entries(run.results.by_model).map(([name, item]) => `${name} ${item.correct}/${item.n}`).join(" · ")
+      : run.status;
+    button.append(el("span", "history-meta", [formatWhen(run.created), scores].filter(Boolean).join(" · ")));
+    button.addEventListener("click", () => openRun(run.id));
+    host.append(button);
+  });
+}
+
+async function openRun(id) {
+  const response = await fetch(`/api/evals?id=${encodeURIComponent(id)}`);
+  const run = await response.json();
+  if (!response.ok) {
+    document.getElementById("eval-status").textContent = run.error || "That evaluation is not saved.";
+    return;
+  }
+  evalSamples = run.samples || [];
+  evalModels = (run.eval && run.eval.model) || [];
+  renderEvalTable();
+  document.getElementById("eval-status").textContent = run.status === "success" ? "Saved run." : "This run is still incomplete.";
+  document.getElementById("eval-results").scrollIntoView({ block: "nearest" });
 }
 
 const fileInput = document.getElementById("file");
@@ -285,8 +797,10 @@ async function importFile(file) {
     return;
   }
   status.textContent = `${file.name} is the file chat will use.`;
+  libraryName = payload.name;
+  latestModel = payload.model;
   renderLibrary(payload);
-  renderModel(payload.model);
+  renderModel(payload.model, false);
 }
 
 document.getElementById("settings").addEventListener("submit", async (event) => {
@@ -300,7 +814,8 @@ document.getElementById("settings").addEventListener("submit", async (event) => 
 
 document.getElementById("clear-key").addEventListener("click", () => saveSettings({ clear_key: true }));
 
-async function saveSettings(body) {
+async function saveSettings(body, options) {
+  const silent = options && options.silent;
   const status = document.getElementById("settings-status");
   const response = await fetch("/api/settings", {
     method: "POST",
@@ -308,16 +823,32 @@ async function saveSettings(body) {
     body: JSON.stringify(body),
   });
   const payload = await response.json();
-  status.textContent = payload.has_key ? "LLM key saved." : "LLM key removed. Chat will use the filtered counts.";
-  document.getElementById("api-key").value = "";
-  renderModel(payload);
+  latestModel = { ...latestModel, ...payload };
+  if (!silent) {
+    status.textContent = payload.has_key ? "LLM key saved." : "LLM key removed. Chat will use the filtered counts.";
+    document.getElementById("api-key").value = "";
+    renderModel(payload, false);
+  } else {
+    document.getElementById("model-name").value = payload.model;
+  }
+  setChatModel(payload.model);
   const library = await fetch("/api/library").then((item) => item.json());
-  document.getElementById("side-status").textContent = payload.has_key
-    ? `${library.name} · LLM connected`
-    : `${library.name} · add an LLM key when you want generated summaries`;
-  document.getElementById("hint").textContent = payload.has_key
-    ? "Answers are short summaries from the connected LLM, using the filtered comments."
-    : "Answers use the filtered counts and quotations until an LLM key is saved in Library.";
+  libraryName = library.name;
+  latestModel = library.model;
+  sideStatus();
+  applyHint();
+  if (!silent) loadModels();
 }
 
-loadLibrary();
+function setGreeting() {
+  const hour = new Date().getHours();
+  const part = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+  const greeting = document.getElementById("greeting");
+  if (greeting) greeting.textContent = `Good ${part}`;
+}
+
+setGreeting();
+
+loadLibrary().then(loadModels).then(loadHistory).catch(() => {
+  hint.textContent = "The page could not finish loading. Check that the server is running.";
+});

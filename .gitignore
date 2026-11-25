@@ -5,3 +5,6 @@ __pycache__/
 data/model.json
 data/library.csv
 data/library.json
+data/chats.json
+data/evals.json
+data/models.json

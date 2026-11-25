@@ -27,7 +27,15 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h6v14H5zM13 5h6v14h-6z"/></svg>
           Library
         </button>
+        <button type="button" class="nav" data-view="evaluate">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8v3H8z"/><rect x="5" y="6" width="14" height="14"/><path d="M8 13l2.5 2.5L16 10"/></svg>
+          Evaluation
+        </button>
       </nav>
+      <div class="history" id="history">
+        <p class="history-label" id="history-label">History</p>
+        <div id="history-list" aria-labelledby="history-label"></div>
+      </div>
       <p class="side-note" id="side-status">Loading the library…</p>
     </aside>
 
@@ -35,9 +43,10 @@
       <section id="chat" class="view">
         <div class="thread" id="thread">
           <div class="empty" id="empty">
-            <p class="eyebrow">Advantage question</p>
-            <h1>Ask about the comments</h1>
-            <p>Answers come from the hard-filtered survey file in the library.</p>
+            <p class="eyebrow">University · UDS</p>
+            <h1 id="greeting">Good evening</h1>
+            <p class="greet-role">Northeastern faculty</p>
+            <p class="greet-line"><span>Ask what the advantage comments say.</span><span>Answers stay inside the filtered survey file.</span></p>
             <div class="starters samples" id="starters">
               <div class="sample-group">
                 <h2>Bar chart</h2>
@@ -65,10 +74,16 @@
           <form id="composer">
             <label class="sr" for="message">Ask about the advantage comments</label>
             <textarea id="message" rows="1" placeholder="Ask about the advantage comments"></textarea>
-            <button type="submit" id="send">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-              <span class="sr">Send</span>
-            </button>
+            <div class="composer-bar">
+              <label class="model-pick" for="chat-model">
+                <span>Model</span>
+                <select id="chat-model"></select>
+              </label>
+              <button type="submit" id="send">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                <span class="sr">Send</span>
+              </button>
+            </div>
           </form>
           <p class="hint" id="hint"></p>
           </div>
@@ -111,6 +126,32 @@
             </div>
             <p class="import-status" id="settings-status" role="status"></p>
           </form>
+        </div>
+      </section>
+
+      <section id="evaluate" class="view" hidden>
+        <div class="panel">
+          <header>
+            <p class="eyebrow">Inspect</p>
+            <h1>Evaluation</h1>
+            <p>Every model is scored on the same six questions. The record follows <a href="https://inspect.aisi.org.uk/eval-logs.html" target="_blank" rel="noopener noreferrer">Inspect</a>, the open-source evaluation log from the UK AI Security Institute. Each sample stores the question, a target, the model output, and a score of correct or incorrect. The solver is the chat reply. The scorers are the checks already under an answer.</p>
+          </header>
+          <h2>Scorers</h2>
+          <ul class="scorer-list" id="eval-scorers"></ul>
+          <h2>Questions</h2>
+          <ul class="question-list" id="eval-questions"></ul>
+          <form id="eval-form">
+            <fieldset class="eval-models">
+              <legend>Models</legend>
+              <div id="eval-model-list"></div>
+            </fieldset>
+            <button type="submit" class="solid" id="eval-run">Run evaluation</button>
+          </form>
+          <p class="lede" id="eval-note">A model is called once for each question. Filtered counts stay on this machine. Up to four models can run together.</p>
+          <p class="import-status" id="eval-status" role="status"></p>
+          <div id="eval-results"></div>
+          <h2>Saved runs</h2>
+          <div class="saved-runs" id="eval-saved"></div>
         </div>
       </section>
     </main>
