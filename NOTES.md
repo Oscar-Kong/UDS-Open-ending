@@ -10,7 +10,7 @@
 - App is stdlib Python only. UI is vanilla HTML/CSS/JS.
 - Northeastern brand: black #000000, white #FFFFFF, red #C8102E under about 25%, canvas #F6F6F4, subtle #3A3A3A, border #D9D9D6. Lato. Sharp 2px corners. No shadows. SVG icons. 44px targets. Focus rings. prefers-reduced-motion.
 - LLM settings names: LLM_API_KEY, LLM_BASE_URL, LLM_MODEL. UI labels: LLM key, Endpoint, LLM name. Dash base https://api-llm.dashlab.studio/v1, model gemma4:31b (the host does not serve gemma4:latest), think false.
-- Each answer shows Scope, Stance, and Reasons in a narrow rail on the left as soon as the question is asked. The summary, chart, and quotations use the wider column beside that rail. Evidence is one line under the summary. Accuracy panel checks numbers, quotations, and the refusal line.
+- Each answer shows Scope, Stance, and Reasons as a small table in a narrow rail on the left as soon as the question is asked. The summary, chart, and quotations use the remaining width beside that rail. Evidence is one line under the summary. Accuracy panel checks numbers, quotations, and the refusal line.
 - Insufficient support hides the reason ranking. Fallback paragraph is the grounded headline when the LLM fails.
 - A count, comparison, or reason-ranking question also shows a small chart or table from those counts. A question the comments cannot answer, or a slice with insufficient support, has no chart.
 - The opening screen greets Northeastern faculty by time of day (Good morning, Good afternoon, or Good evening), then lists nine sample questions in three groups: Bar chart, Table, and No chart.

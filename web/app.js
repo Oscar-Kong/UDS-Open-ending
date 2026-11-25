@@ -241,7 +241,7 @@ function factsShell(wait) {
   ["Scope", "Stance", "Reasons"].forEach((name) => {
     const section = el("section", "fact");
     section.append(el("h3", "", name));
-    section.append(el("p", "fact-wait", wait));
+    section.append(factTable([{ label: wait, value: "" }]));
     side.append(section);
   });
   return side;
@@ -263,24 +263,45 @@ function factsPanel(findings) {
     blocks.forEach((block) => {
       const section = el("section", "fact");
       section.append(el("h3", "", block.agent));
-      (block.lines || []).forEach((line) => {
-        compactFact(block.agent, line).forEach((bit, index) => {
-          const stat = block.agent !== "Reasons" || index > 0;
-          const row = el("p", stat ? "fact-stat" : "fact-name", bit);
-          row.title = line;
-          section.append(row);
-        });
-      });
+      const rows = (block.lines || []).flatMap((line) => factRows(block.agent, line));
+      section.append(factTable(rows.length ? rows : [{ label: block.lines[0] || "", value: "" }]));
       side.append(section);
     });
   });
   return side;
 }
 
-function compactFact(agent, line) {
+function factTable(rows) {
+  const table = document.createElement("table");
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    const label = document.createElement("th");
+    label.scope = "row";
+    label.textContent = row.label;
+    const value = document.createElement("td");
+    value.textContent = row.value;
+    if (row.title) {
+      label.title = row.title;
+      value.title = row.title;
+    }
+    tr.append(label, value);
+    table.append(tr);
+  });
+  return table;
+}
+
+function factRows(agent, line) {
   if (agent === "Scope") {
-    if (line.includes("comments in this slice")) return [line.replace(" in this slice", "").replace(/\.$/, "")];
-    return line.replace(/\.$/, "").split(", ").map((part) => part.replace(" short reasons", " short"));
+    if (line.includes("comments in this slice")) {
+      const count = line.match(/^([\d,]+)/);
+      return [{ label: "Comments", value: count ? count[1] : line, title: line }];
+    }
+    return line.replace(/\.$/, "").split(", ").map((part) => {
+      const match = part.trim().match(/^([\d,]+)\s+(.+)$/);
+      if (!match) return { label: part.trim(), value: "", title: line };
+      const name = match[2].replace("short reasons", "Short").replace("position-only", "Position-only");
+      return { label: name.charAt(0).toUpperCase() + name.slice(1), value: match[1], title: line };
+    });
   }
   if (agent === "Stance") {
     const yes = line.match(/(\d+%) say yes \(([\d,]+)\)/);
@@ -288,19 +309,19 @@ function compactFact(agent, line) {
     const mixed = line.match(/([\d,]+) are mixed/);
     const unsure = line.match(/([\d,]+) are unsure/);
     const clear = line.match(/clear \(([\d,]+) comments\)/);
-    const bits = [];
-    if (clear) bits.push(`${clear[1]} clear`);
-    if (yes) bits.push(`${yes[1]} yes (${yes[2]})`);
-    if (no) bits.push(`${no[1]} no`);
-    if (mixed) bits.push(`${mixed[1]} mixed`);
-    if (unsure) bits.push(`${unsure[1]} unsure`);
-    if (bits.length) return bits;
+    const rows = [];
+    if (clear) rows.push({ label: "Clear", value: clear[1], title: line });
+    if (yes) rows.push({ label: "Yes", value: `${yes[2]} · ${yes[1]}`, title: line });
+    if (no) rows.push({ label: "No", value: no[1], title: line });
+    if (mixed) rows.push({ label: "Mixed", value: mixed[1], title: line });
+    if (unsure) rows.push({ label: "Unsure", value: unsure[1], title: line });
+    if (rows.length) return rows;
   }
   if (agent === "Reasons") {
     const match = line.match(/^(.+?): ([\d,]+) explanations \((\d+)% of explanations\), plus ([\d,]+) short labels\.$/);
-    if (match) return [match[1], `${match[2]} · ${match[3]}%`, `${match[4]} short`];
+    if (match) return [{ label: match[1], value: `${match[2]} · ${match[3]}%`, title: line }];
   }
-  return [line];
+  return [{ label: line, value: "", title: line }];
 }
 
 function dashboardPanel(dashboard) {
